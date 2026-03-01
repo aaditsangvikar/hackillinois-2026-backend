@@ -1,10 +1,11 @@
 from typing import Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, Response, UploadFile, File, HTTPException
 import shutil
 import tempfile
 import os
 import room_location
 import target_position
+import hallway4
 import supabase
 from supabase import create_client, Client
 
@@ -60,8 +61,8 @@ async def upload_image(file: UploadFile = File(...)):
 
                 with open(temp_path, "rb") as f:
                     response = (
-                        supabase.storage
-                        .from_("avatars")
+                        supabase_client.storage
+                        .from_("floorplans")
                         .upload(
                             file=f,
                             path=f"{os.path.basename(temp_path)}",
@@ -78,3 +79,110 @@ async def upload_image(file: UploadFile = File(...)):
                 file.file.close()
 
 # The file is now deleted because the 'with' block has ended
+
+@app.get("/api/calculate_route")
+def calculate_route(building: str, floor: str, curr_room: str, target_room: str, bathroom: bool = False, water_fountain: bool = False):
+    supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    # Verify the building and floor exist in the database
+    building_floor_check = supabase_client.table("room_locations").select("image").eq("image", f"{building}_{floor}.png").execute()
+    if not building_floor_check.data:
+        raise HTTPException(status_code=404, detail="Building or floor not found")
+    
+    # calculate current room location
+    curr_room_check = supabase_client.table("room_locations").select("x", "y").eq("image", f"{building}_{floor}.png").eq("room_number", curr_room).execute()
+    if not curr_room_check.data:
+        raise HTTPException(status_code=404, detail="Current room not found")
+    
+    # pull image from Supabase storage
+    image_response = supabase_client.storage.from_("floorplans").download(f"{building}_{floor}.png")
+    if not image_response:
+        raise HTTPException(status_code=404, detail="Floorplan image not found in storage")
+    
+    # temporarily save the image to disk for processing
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        tmp.write(image_response)
+        temp_image_path = tmp.name
+    
+    # If bathroom is requested, find the nearest bathroom to the current room
+    if bathroom:
+        
+        # find the nearest bathroom to the current room
+        curr_x = curr_room_check.data[0]["x"]
+        curr_y = curr_room_check.data[0]["y"]
+
+        # Get all bathroom locations for this building/floor
+        bathroom_locations = supabase_client.table("ticker_locations").select("x", "y", "ticker").eq("image", f"{building}_{floor}.png").in_("ticker", ["male.png", "female.png", "neutral.png"]).execute()
+
+        if not bathroom_locations.data:
+            raise HTTPException(status_code=404, detail="No bathrooms found in this building/floor")
+
+        # Find the nearest bathroom
+        nearest_bathroom = None
+        min_distance = float('inf')
+
+        for bathroom in bathroom_locations.data:
+            distance = ((bathroom["x"] - curr_x) ** 2 + (bathroom["y"] - curr_y) ** 2) ** 0.5
+            if distance < min_distance:
+                min_distance = distance
+                nearest_bathroom = bathroom
+
+        # calculate path using hallway4.py
+        path_image = hallway4.find_floorplan_path(temp_image_path, (curr_room_check.data[0]["x"], curr_room_check.data[0]["y"]), (nearest_bathroom["x"], nearest_bathroom["y"]))
+
+        if path_image is None:
+            raise HTTPException(status_code=404, detail="No path found to the nearest bathroom")
+
+        # 3. Return as a Response with the correct MIME type
+        return Response(content=path_image, media_type="image/png")
+    
+
+    
+    # If water fountain is requested, find the nearest water fountain to the current room
+    if water_fountain:
+        
+        # find the nearest water fountain to the current room
+        curr_x = curr_room_check.data[0]["x"]
+        curr_y = curr_room_check.data[0]["y"]
+
+        # Get all water fountain locations for this building/floor
+        water_fountain_locations = supabase_client.table("ticker_locations").select("x", "y", "ticker").eq("image", f"{building}_{floor}.png").eq("ticker", "water_fountain").execute()
+
+        if not water_fountain_locations.data:
+            raise HTTPException(status_code=404, detail="No water fountains found in this building/floor")
+
+        # Find the nearest water fountain
+        nearest_water_fountain = None
+        min_distance = float('inf')
+
+        for fountain in water_fountain_locations.data:
+            distance = ((fountain["x"] - curr_x) ** 2 + (fountain["y"] - curr_y) ** 2) ** 0.5
+            if distance < min_distance:
+                min_distance = distance
+                nearest_water_fountain = fountain
+        
+        # calculate path using hallway4.py
+        path_image = hallway4.find_floorplan_path(temp_image_path, (curr_room_check.data[0]["x"], curr_room_check.data[0]["y"]), (nearest_water_fountain["x"], nearest_water_fountain["y"]))
+
+        if path_image is None:
+            raise HTTPException(status_code=404, detail="No path found to the nearest water fountain")
+        
+        # 3. Return as a Response with the correct MIME type
+        return Response(content=path_image, media_type="image/png")
+    
+    # calculate target room location
+    target_room_check = supabase_client.table("room_locations").select("x", "y").eq("image", f"{building}_{floor}.png").eq("room_number", target_room).execute()
+    if not target_room_check.data:
+        raise HTTPException(status_code=404, detail="Target room not found")
+    
+    target_room_x = target_room_check.data[0]["x"]
+    target_room_y = target_room_check.data[0]["y"]
+
+    # calculate path using hallway4.py
+    path_image = hallway4.find_floorplan_path(temp_image_path, (curr_room_check.data[0]["x"], curr_room_check.data[0]["y"]), (target_room_x, target_room_y))
+
+    if path_image is None:
+        raise HTTPException(status_code=404, detail="No path found to the target room")
+    
+    # 3. Return as a Response with the correct MIME type
+    return Response(content=path_image, media_type="image/png")
