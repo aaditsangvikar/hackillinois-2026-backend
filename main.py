@@ -8,10 +8,19 @@ import target_position
 import hallway4
 import supabase
 from supabase import create_client, Client
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 SUPABASE_URL = "https://upsqvxtvlvxyuimngxil.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwc3F2eHR2bHZ4eXVpbW5neGlsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzMDQ4NDUsImV4cCI6MjA4Nzg4MDg0NX0.rAiok4qC1RM88Iq5of_jsBgFcD7sQ6JCMBgCvDomPY4"
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 @app.get("/")
