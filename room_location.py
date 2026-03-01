@@ -1,9 +1,10 @@
 import easyocr
 import numpy as np
+import gc
 
 # Initialize the reader (English language)
 # This takes a second to load, so do it once at the top of your script
-reader = easyocr.Reader(['en'])
+reader = easyocr.Reader(['en'], gpu=False)
 
 def map_room_numbers(image_path):
     """
@@ -23,5 +24,8 @@ def map_room_numbers(image_path):
         # Clean the text (remove spaces/extra chars)
         room_id = text.strip()
         room_map[room_id] = (center_x, center_y)
+
+        del reader
+        gc.collect()
         
     return room_map
